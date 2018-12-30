@@ -1,0 +1,67 @@
+#!/bin/bash
+
+set -e
+set -x
+
+busybox_version=1.29.3
+linux_version=4.20
+work_dir=/tmp/mynewlinux
+
+artifacts_dir=/tmp/artifacts
+
+busybox=busybox-${busybox_version}
+linux=linux-${linux_version}
+
+initrd_dir=${work_dir}/myinitrd
+linux_dir=${work_dir}/${linux}
+busybox_dir=${work_dir}/${busybox}
+
+rm -rf $work_dir $initrd_dir $artifacts_dir
+mkdir -p $work_dir $initrd_dir $artifacts_dir
+
+rm -f ${linux}.tar.xz
+rm -f ${busybox}.tar.bz2
+rm -rf ${linux}
+
+sudo yum -y -d0 -e0 install vim wget git ncurses-devel glibc-static pam-devel gcc gcc bison flex bc 
+wget -q "https://busybox.net/downloads/${busybox}.tar.bz2" -O ${busybox_dir}.tar.bz2
+wget -q "https://cdn.kernel.org/pub/linux/kernel/v4.x/${linux}.tar.xz" -O ${linux_dir}.tar.xz
+
+cd $work_dir
+tar -xf ${linux}.tar.xz
+bunzip2 ${busybox}.tar.bz2
+tar -xf ${busybox}.tar
+
+######### build the linux kernel
+cp /tmp/kernel_config ${linux_dir}/.config
+cd $linux_dir
+make olddefconfig
+make -j $(nproc)
+cp arch/x86/boot/bzImage $artifacts_dir
+
+
+######### build the initrd
+cd $busybox_dir
+cp /tmp/busybox_config ${busybox_dir}/.config
+make -j $(nproc)
+make install
+cp -rf ${busybox_dir}/_install/* $initrd_dir
+
+
+######### build the init script
+
+cat << EOF > ${initrd_dir}/init
+#!/bin/sh
+
+mkdir -p /proc /sys
+
+mount -t proc none /proc
+mount -t sysfs none /sys
+
+exec /bin/sh
+EOF
+
+chmod +x ${initrd_dir}/init
+
+cd ${initrd_dir}
+find . -print0 | cpio --null -ov --format=newc | gzip -9 > ${artifacts_dir}/initramfs.cpio.gz
